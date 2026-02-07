@@ -1,8 +1,9 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { PROJECTS, CONFERENCES } from '../constants.tsx';
 import { Send, X, MessageCircle, Fish } from 'lucide-react';
+
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'google/gemini-2.0-flash-exp:free';
 
 type CatState = 'idle' | 'walking' | 'sleeping' | 'stalking' | 'eating';
 
@@ -160,51 +161,68 @@ const RoamingCat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      if (!apiKey || apiKey.startsWith('PLACEHOLDER')) {
+        setMessages(prev => [...prev, { role: 'model', text: "Hiss! No OpenRouter API key. Add OPENROUTER_API_KEY at openrouter.ai/settings/keys, then in .env.local and Vercel env vars." }]);
+        return;
+      }
+
       const projectContext = PROJECTS.map(p => `- ${p.title} (${p.category}): ${p.description}`).join('\n');
       const confContext = CONFERENCES.map(c => `- ${c.title} in ${c.location} (${c.date}): ${c.description}`).join('\n');
       
-      const systemInstruction = `
-        You are 'Sketch', a portfolio assistant cat living on Sanjana's website. 
-        You are witty, slightly lazy, and speak with occasional cat puns (but don't overdo it).
-        Your goal is to help visitors learn about Sanjana.
-        
-        About Sanjana:
-        - Product Designer creating clear, user-centered experiences through thoughtful design
-        - Based in Boston
-        - Merges complex architecture with intuitive aesthetics.
-        
-        Her Projects:
-        ${projectContext}
-        
-        Her Speaking & Events:
-        ${confContext}
-        
-        Keep your answers concise (under 40 words usually). If someone asks to see a project, tell them to click on the cards.
-      `;
+      const systemContent = `You are 'Sketch', a portfolio assistant cat living on Sanjana's website. 
+You are witty, slightly lazy, and speak with occasional cat puns (but don't overdo it).
+Your goal is to help visitors learn about Sanjana.
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          ...messages.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
-          { role: 'user', parts: [{ text: userMsg }] }
-        ],
-        config: {
-          systemInstruction: systemInstruction,
-        }
+About Sanjana:
+- Product Designer creating clear, user-centered experiences through thoughtful design
+- Based in Boston
+- Merges complex architecture with intuitive aesthetics.
+
+Her Projects:
+${projectContext}
+
+Her Speaking & Events:
+${confContext}
+
+Keep your answers concise (under 40 words usually). If someone asks to see a project, tell them to click on the cards.`;
+
+      const openRouterMessages = [
+        { role: 'system' as const, content: systemContent },
+        ...messages.map(m => ({ role: m.role === 'model' ? 'assistant' as const : ('user' as const), content: m.text })),
+        { role: 'user' as const, content: userMsg }
+      ];
+
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      };
+      if (typeof window !== 'undefined') headers['HTTP-Referer'] = window.location.origin;
+
+      const res = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          messages: openRouterMessages,
+          max_tokens: 150
+        })
       });
 
-      const aiText = response.text || "Purr... something went wrong. Try again?";
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(errBody || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const aiText = data?.choices?.[0]?.message?.content?.trim() || "Purr... something went wrong. Try again?";
       setMessages(prev => [...prev, { role: 'model', text: aiText }]);
     } catch (error: unknown) {
       console.error("AI Error:", error);
       let friendlyMsg = "Hiss! My connection is fuzzy.";
       const raw = error && typeof error === 'object' && 'message' in error ? String((error as { message: string }).message) : '';
-      if (raw.includes('API key not valid') || raw.includes('API_KEY_INVALID')) {
-        friendlyMsg = "Hiss! That API key isn’t valid for Gemini. Get a free key at aistudio.google.com/app/apikey (it should start with AIzaSy…). Put it in .env.local as GEMINI_API_KEY=your_key and restart the dev server.";
-      } else if (!process.env.API_KEY || process.env.API_KEY.startsWith('PLACEHOLDER')) {
-        friendlyMsg = "Hiss! No API key set. Get a free Gemini key at aistudio.google.com/app/apikey, add GEMINI_API_KEY=your_key to .env.local, and restart the dev server.";
+      if (raw.includes('401') || raw.includes('Unauthorized') || raw.includes('invalid') || raw.includes('API key')) {
+        friendlyMsg = "Hiss! OpenRouter API key invalid or missing. Get a key at openrouter.ai/settings/keys and set OPENROUTER_API_KEY in .env.local and in Vercel.";
       } else if (raw) {
         friendlyMsg = `Hiss! Something went wrong. ${raw.slice(0, 80)}${raw.length > 80 ? '…' : ''}`;
       }
