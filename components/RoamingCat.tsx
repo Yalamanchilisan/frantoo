@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import { PROJECTS, CONFERENCES } from '../constants.tsx';
-import { Send, X, MessageCircle, Fish } from 'lucide-react';
-
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'openrouter/free';
+import { Send, X, MessageCircle, Fish, RotateCcw } from 'lucide-react';
 
 type CatState = 'idle' | 'walking' | 'sleeping' | 'stalking' | 'eating';
 
@@ -11,6 +9,8 @@ interface Message {
   role: 'user' | 'model';
   text: string;
 }
+
+const INITIAL_MESSAGES: Message[] = [{ role: 'model', text: "Meow! I'm Sketch. Ask me anything about Sanjana's work." }];
 
 const FED_COUNT_KEY = 'sketch_cat_fed_count';
 
@@ -31,9 +31,7 @@ const RoamingCat: React.FC = () => {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [fedCount, setFedCount] = useState(getStoredFedCount);
   
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'model', text: "Meow! I'm Sketch. Ask me anything about Sanjana's work." }
-  ]);
+  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -161,24 +159,19 @@ const RoamingCat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
-      const isPlaceholder = !apiKey || apiKey.startsWith('PLACEHOLDER') || apiKey === 'your_openrouter_key_here';
-      if (isPlaceholder) {
-        setMessages(prev => [...prev, { role: 'model', text: "Hiss! No OpenRouter API key. Get one at openrouter.ai/settings/keys, then set OPENROUTER_API_KEY in .env.local (and in Vercel env vars for deployment). Restart the dev server after changing .env.local." }]);
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey.startsWith('PLACEHOLDER')) {
+        setMessages(prev => [...prev, { role: 'model', text: "Hiss! No Gemini API key. Set GEMINI_API_KEY in .env.local and in Vercel, then restart." }]);
         return;
       }
 
       const projectContext = PROJECTS.map(p => `- ${p.title} (${p.category}): ${p.description}`).join('\n');
       const confContext = CONFERENCES.map(c => `- ${c.title} in ${c.location} (${c.date}): ${c.description}`).join('\n');
-      
-      const systemContent = `You are 'Sketch', a portfolio assistant cat living on Sanjana's website. 
-You are witty, slightly lazy, and speak with occasional cat puns (but don't overdo it).
-Your goal is to help visitors learn about Sanjana.
+      const systemInstruction = `You are Sketch, a cat who lives on Sanjana's portfolio site. You are NOT Sanjana. Never say "I'm Sanjana." You talk ABOUT Sanjana to visitors. Stay in character as a witty, slightly lazy cat. Use short cat puns sometimes. Keep replies under 40 words.
 
-About Sanjana:
-- Product Designer creating clear, user-centered experiences through thoughtful design
-- Based in Boston
-- Merges complex architecture with intuitive aesthetics.
+About Sanjana (the human whose site this is):
+- Product Designer, user-centered design, based in Boston
+- Merges complex architecture with intuitive aesthetics
 
 Her Projects:
 ${projectContext}
@@ -186,44 +179,26 @@ ${projectContext}
 Her Speaking & Events:
 ${confContext}
 
-Keep your answers concise (under 40 words usually). If someone asks to see a project, tell them to click on the cards.`;
+If someone asks to see a project, tell them to click the cards. Answer "who are you" as Sketch the cat, not Sanjana.`;
 
-      const openRouterMessages = [
-        { role: 'system' as const, content: systemContent },
-        ...messages.map(m => ({ role: m.role === 'model' ? 'assistant' as const : ('user' as const), content: m.text })),
-        { role: 'user' as const, content: userMsg }
-      ];
-
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      };
-      if (typeof window !== 'undefined') headers['HTTP-Referer'] = window.location.origin;
-
-      const res = await fetch(OPENROUTER_API_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages: openRouterMessages,
-          max_tokens: 150
-        })
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          ...messages.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
+          { role: 'user', parts: [{ text: userMsg }] }
+        ],
+        config: { systemInstruction }
       });
 
-      if (!res.ok) {
-        const errBody = await res.text();
-        throw new Error(errBody || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      const aiText = data?.choices?.[0]?.message?.content?.trim() || "Purr... something went wrong. Try again?";
+      const aiText = response.text?.trim() || "Purr... something went wrong. Try again?";
       setMessages(prev => [...prev, { role: 'model', text: aiText }]);
     } catch (error: unknown) {
       console.error("AI Error:", error);
       let friendlyMsg = "Hiss! My connection is fuzzy.";
       const raw = error && typeof error === 'object' && 'message' in error ? String((error as { message: string }).message) : '';
-      if (raw.includes('401') || raw.includes('Unauthorized') || raw.includes('invalid') || raw.includes('API key')) {
-        friendlyMsg = "Hiss! OpenRouter API key invalid or missing. Get a key at openrouter.ai/settings/keys and set OPENROUTER_API_KEY in .env.local and in Vercel.";
+      if (raw.includes('API key not valid') || raw.includes('API_KEY_INVALID')) {
+        friendlyMsg = "Hiss! Gemini API key invalid. Get a key at aistudio.google.com/app/apikey and set GEMINI_API_KEY in .env.local and Vercel.";
       } else if (raw) {
         friendlyMsg = `Hiss! Something went wrong. ${raw.slice(0, 80)}${raw.length > 80 ? '…' : ''}`;
       }
@@ -231,6 +206,10 @@ Keep your answers concise (under 40 words usually). If someone asks to see a pro
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRefreshChat = () => {
+    setMessages(INITIAL_MESSAGES);
   };
 
   const isMoving = state === 'walking' || state === 'stalking' || isLured;
@@ -361,9 +340,14 @@ Keep your answers concise (under 40 words usually). If someone asks to see a pro
                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                  <span className="font-hand font-bold text-xl">Chat with Sketch</span>
                </div>
-               <button onClick={() => setIsChatOpen(false)} className="hover:text-red-500 transition-colors">
-                 <X className="w-5 h-5" />
-               </button>
+               <div className="flex items-center gap-1">
+                 <button onClick={handleRefreshChat} className="p-1.5 hover:bg-stone-200 rounded transition-colors" title="Refresh chat">
+                   <RotateCcw className="w-5 h-5 text-stone-600" />
+                 </button>
+                 <button onClick={() => setIsChatOpen(false)} className="p-1.5 hover:text-red-500 transition-colors">
+                   <X className="w-5 h-5" />
+                 </button>
+               </div>
             </div>
 
             {/* Messages Area */}
