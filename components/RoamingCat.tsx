@@ -185,7 +185,7 @@ const RoamingCat: React.FC = () => {
       `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.5-flash',
         contents: [
           ...messages.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
           { role: 'user', parts: [{ text: userMsg }] }
@@ -197,9 +197,18 @@ const RoamingCat: React.FC = () => {
 
       const aiText = response.text || "Purr... something went wrong. Try again?";
       setMessages(prev => [...prev, { role: 'model', text: aiText }]);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("AI Error:", error);
-      setMessages(prev => [...prev, { role: 'model', text: "Hiss! My connection is fuzzy. (Check API Key)" }]);
+      let friendlyMsg = "Hiss! My connection is fuzzy.";
+      const raw = error && typeof error === 'object' && 'message' in error ? String((error as { message: string }).message) : '';
+      if (raw.includes('API key not valid') || raw.includes('API_KEY_INVALID')) {
+        friendlyMsg = "Hiss! That API key isn’t valid for Gemini. Get a free key at aistudio.google.com/app/apikey (it should start with AIzaSy…). Put it in .env.local as GEMINI_API_KEY=your_key and restart the dev server.";
+      } else if (!process.env.API_KEY || process.env.API_KEY.startsWith('PLACEHOLDER')) {
+        friendlyMsg = "Hiss! No API key set. Get a free Gemini key at aistudio.google.com/app/apikey, add GEMINI_API_KEY=your_key to .env.local, and restart the dev server.";
+      } else if (raw) {
+        friendlyMsg = `Hiss! Something went wrong. ${raw.slice(0, 80)}${raw.length > 80 ? '…' : ''}`;
+      }
+      setMessages(prev => [...prev, { role: 'model', text: friendlyMsg }]);
     } finally {
       setIsLoading(false);
     }
