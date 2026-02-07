@@ -3,7 +3,7 @@ import { PROJECTS, CONFERENCES } from '../constants.tsx';
 import { Send, X, MessageCircle, Fish } from 'lucide-react';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'google/gemini-2.0-flash-exp:free';
+const OPENROUTER_MODEL = 'openrouter/free';
 
 type CatState = 'idle' | 'walking' | 'sleeping' | 'stalking' | 'eating';
 
@@ -161,9 +161,10 @@ const RoamingCat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const apiKey = process.env.OPENROUTER_API_KEY;
-      if (!apiKey || apiKey.startsWith('PLACEHOLDER')) {
-        setMessages(prev => [...prev, { role: 'model', text: "Hiss! No OpenRouter API key. Add OPENROUTER_API_KEY at openrouter.ai/settings/keys, then in .env.local and Vercel env vars." }]);
+      const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
+      const isPlaceholder = !apiKey || apiKey.startsWith('PLACEHOLDER') || apiKey === 'your_openrouter_key_here';
+      if (isPlaceholder) {
+        setMessages(prev => [...prev, { role: 'model', text: "Hiss! No OpenRouter API key. Get one at openrouter.ai/settings/keys, then set OPENROUTER_API_KEY in .env.local (and in Vercel env vars for deployment). Restart the dev server after changing .env.local." }]);
         return;
       }
 
